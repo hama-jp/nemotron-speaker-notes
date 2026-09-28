@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, os, re, shutil, subprocess, threading, uuid
+import json, os, re, shutil, subprocess, threading, uuid, time
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from config import ROOT, DATA, MODEL_ID, REVISION
+from media_pipeline import inspect_media, preview_video
 
 DATA.mkdir(parents=True, exist_ok=True)
 MAX_BYTES = 2 * 1024**3
@@ -57,24 +58,8 @@ def update(p, **kwargs):
     return d
 
 
-def probe(path):
-    r = subprocess.run(
-        [
-            "ffprobe",
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration:stream=codec_type",
-            "-of",
-            "json",
-            str(path),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=True,
-    )
-    x = json.loads(r.stdout)
+def probe(path, info=None):
+    x = inspect_media(path) if info is None else info
     duration = float(x["format"]["duration"])
     if not 0 < duration <= MAX_SECONDS:
         raise ValueError("音声の長さは1時間以内にしてください。")
@@ -123,6 +108,10 @@ def write_result(p, audio, sr, logits, segments, environment):
 
 def process(p):
     global MODEL, PROCESSOR
+    started = time.perf_counter()
+    timings = {}
+    preview_pool = ThreadPoolExecutor(max_workers=1)
+    preview_future = None
     try:
         import numpy as np, soundfile as sf, torch, transformers
         from transformers import AutoProcessor, AutoModelForAudioFrameClassification
@@ -130,7 +119,16 @@ def process(p):
         update(p, status="running", stage="音声を準備しています")
         meta = read_job(p)
         source = p / meta["source_file"]
-        duration, has_video = probe(source)
+        info = inspect_media(source)
+        duration, has_video = probe(source, info)
+        if has_video:
+            def prepare_preview():
+                tick = time.perf_counter()
+                mode = preview_video(source, p / "preview.mp4", info)
+                update(p, has_video=True, media_file="preview.mp4", preview_mode=mode)
+                return time.perf_counter() - tick
+            preview_future = preview_pool.submit(prepare_preview)
+        tick = time.perf_counter()
         wav = p / "audio.wav"
         subprocess.run(
             [
@@ -152,58 +150,17 @@ def process(p):
             capture_output=True,
             timeout=300,
         )
-        if has_video:
-            update(p, stage="ブラウザ用の動画を準備しています")
-            media = p / "preview.mp4"
-            subprocess.run(
-                [
-                    "ffmpeg",
-                    "-nostdin",
-                    "-v",
-                    "error",
-                    "-y",
-                    "-i",
-                    str(source),
-                    "-map",
-                    "0:v:0",
-                    "-map",
-                    "0:a:0",
-                    "-vf",
-                    "scale='min(1280,iw)':-2",
-                    "-c:v",
-                    "libx264",
-                    "-preset",
-                    "ultrafast",
-                    "-crf",
-                    "24",
-                    "-threads",
-                    "4",
-                    "-c:a",
-                    "aac",
-                    "-movflags",
-                    "+faststart",
-                    str(media),
-                ],
-                check=True,
-                capture_output=True,
-                timeout=1800,
-            )
-            media_name = "preview.mp4"
-        else:
-            media_name = "audio.wav"
-        update(
-            p,
-            has_video=has_video,
-            media_file=media_name,
-            duration=duration,
-            stage="モデルを読み込んでいます",
-        )
+        timings["audio_prepare"] = time.perf_counter() - tick
+        update(p, has_video=has_video, duration=duration, stage="モデルを読み込んでいます")
+        if not has_video:
+            update(p, media_file="audio.wav")
         audio, sr = sf.read(wav, dtype="float32")
         assert sr == 16000 and audio.ndim == 1 and np.isfinite(audio).all()
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA GPUを利用できません。")
         torch.set_num_threads(4)
         with MODEL_LOCK:
+            tick = time.perf_counter()
             if MODEL is None:
                 PROCESSOR = AutoProcessor.from_pretrained(
                     MODEL_ID, revision=REVISION, local_files_only=True
@@ -218,6 +175,8 @@ def process(p):
                     .to("cuda")
                     .eval()
                 )
+            timings["diarization_load"] = time.perf_counter() - tick
+            tick = time.perf_counter()
             update(p, stage="音声から話者区間を推定しています")
             inputs = PROCESSOR(audio, sampling_rate=sr, return_tensors="pt").to(
                 MODEL.device, dtype=MODEL.dtype
@@ -248,11 +207,13 @@ def process(p):
                 "mode": "offline, default internal chunks",
             }
             write_result(p, audio, sr, logits, segments, env)
+            del inputs, logits
+            timings["diarization"] = time.perf_counter() - tick
         if meta.get("transcribe", True):
             from transcription import transcribe
 
             try:
-                transcribe(p, update)
+                transcribe(p, update, audio=audio, timings=timings)
             except Exception as exc:
                 import traceback
 
@@ -262,12 +223,25 @@ def process(p):
                     asr_error="文字起こしに失敗しました。話者推定は利用できます。 "
                     + str(exc)[:160],
                 )
-        update(p, status="done", stage="解析完了")
+        if preview_future is not None:
+            if not preview_future.done():
+                update(p, stage="解析済み・再生用の動画を仕上げています")
+            try:
+                timings["preview"] = preview_future.result()
+            except Exception:
+                import traceback
+                (p / "preview-error.log").write_text(traceback.format_exc())
+                update(p, has_video=False, media_file="audio.wav",
+                       preview_error="動画の変換に失敗しました。音声で結果を確認できます。")
+        timings["total"] = time.perf_counter() - started
+        update(p, status="done", stage="解析完了", timings=timings)
     except Exception as exc:
         import traceback
 
         (p / "error.log").write_text(traceback.format_exc())
         update(p, status="error", stage="解析できませんでした", error=str(exc)[:500])
+    finally:
+        preview_pool.shutdown(wait=True, cancel_futures=True)
 
 
 @app.middleware("http")

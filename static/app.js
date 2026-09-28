@@ -120,7 +120,7 @@ async function loadJob(id) {
         r.edited = true;
       }
     });
-  notice(job.asr_error || "");
+  notice([job.asr_error, job.preview_error].filter(Boolean).join(" "));
   $("#summary").textContent =
     `${fmt(result.duration)} · ${result.speakers.length} 話者 · ${result.transcript ? "文字起こし済み" : "話者推定済み"}`;
   media.src = `/api/jobs/${id}/media`;

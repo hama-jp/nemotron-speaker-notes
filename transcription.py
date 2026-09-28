@@ -1,8 +1,23 @@
 """Local ASR and explicit timestamp-based speaker assignment; no face recognition."""
 
 import json
+import threading
+import time
 from pathlib import Path
 from config import WHISPER_CACHE
+
+
+_MODEL = None
+_MODEL_LOCK = threading.Lock()
+
+def load_model():
+    """Reuse the same GPU model for queued recordings."""
+    global _MODEL
+    import whisper
+    with _MODEL_LOCK:
+        if _MODEL is None:
+            _MODEL = whisper.load_model("turbo", device="cuda", download_root=str(WHISPER_CACHE))
+        return _MODEL
 
 
 def align_words(asr_segments, diar_segments):
@@ -50,14 +65,18 @@ def align_words(asr_segments, diar_segments):
     return rows
 
 
-def transcribe(p, update):
-    import whisper, torch, os
+def transcribe(p, update, *, audio=None, timings=None):
+    import whisper
 
     p = Path(p)
     update(p, status="running", stage="日本語を文字起こししています（Whisper）")
-    model = whisper.load_model("turbo", device="cuda", download_root=str(WHISPER_CACHE))
+    tick = time.perf_counter()
+    model = load_model()
+    if timings is not None:
+        timings["asr_load"] = time.perf_counter() - tick
+    tick = time.perf_counter()
     raw = model.transcribe(
-        str(p / "audio.wav"),
+        audio if audio is not None else str(p / "audio.wav"),
         language="ja",
         task="transcribe",
         word_timestamps=True,
@@ -81,6 +100,6 @@ def transcribe(p, update):
     t = p / "result.json.tmp"
     t.write_text(json.dumps(d, ensure_ascii=False))
     t.replace(p / "result.json")
-    del model
-    torch.cuda.empty_cache()
+    if timings is not None:
+        timings["asr"] = time.perf_counter() - tick
     return len(d["transcript"])
