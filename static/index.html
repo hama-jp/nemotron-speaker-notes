@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="ja">
+  <meta charset="utf-8" /><meta
+    name="viewport"
+    content="width=device-width,initial-scale=1"
+  /><title>話者ノート — Nemotron 3 Diarization</title
+  ><link rel="icon" href="data:," /><link rel="stylesheet" href="/style.css" />
+  <header>
+    <div>
+      <div class="eyebrow">LOCAL AUDIO WORKSPACE</div>
+      <h1>話者ノート <span>Nemotron 3 Diarization</span></h1>
+    </div>
+    <div class="local"><i></i> LOCAL · CUDA <span>ローカル処理</span></div>
+  </header>
+  <main>
+    <section class="toolbar">
+      <div class="fileactions">
+        <label class="primary filebutton"
+          >＋ 動画・音声を開く<input
+            type="file"
+            id="file"
+            accept="video/*,audio/*,.mkv,.flac,.m4a" /></label
+        ><label class="check"
+          ><input id="asr" type="checkbox" checked /> 日本語を文字起こし</label
+        ><span class="limits">最大8話者・1時間・2GB</span>
+      </div>
+      <div class="actions">
+        <select id="history" aria-label="解析したファイル"></select
+        ><button id="json">JSON</button><button id="srt">字幕 SRT</button
+        ><button id="txt">テキスト</button>
+      </div>
+    </section>
+    <div id="notice" role="status" hidden></div>
+    <section class="heading">
+      <div>
+        <span class="section-tag">日本語の会議を、声ごとに。</span>
+        <h2 id="filename">会議の動画・音声を選んでください</h2>
+      </div>
+      <span id="summary"></span>
+    </section>
+    <div class="workspace">
+      <section class="view">
+        <div class="player" id="player">
+          <video id="media" playsinline preload="metadata"></video>
+          <div id="audioPlaceholder" hidden>
+            <span>♫</span>
+            <p>音声ファイル</p>
+          </div>
+          <svg
+            id="regions"
+            viewBox="0 0 1000 562.5"
+            preserveAspectRatio="none"
+          ></svg>
+          <div id="activeLabels"></div>
+          <div id="caption"></div>
+          <div id="regionHint" hidden>
+            対応する人物をドラッグで囲んでください。Escで取消。
+          </div>
+        </div>
+        <div class="transport">
+          <button id="play" class="play" aria-label="再生">▶</button
+          ><span id="clock">00:00 / 00:00</span
+          ><input
+            id="seek"
+            type="range"
+            min="0"
+            max="300"
+            step=".01"
+            value="0"
+            aria-label="再生位置"
+          /><select id="speed" aria-label="再生速度">
+            <option value="1">1×</option>
+            <option value=".75">0.75×</option>
+            <option value="1.25">1.25×</option></select
+          ><button id="clearBoxes">枠を消す</button>
+        </div>
+        <div id="credit"></div>
+      </section>
+      <aside>
+        <div class="aside-title">
+          <h3>いま話しているのは</h3>
+          <span>音声から推定</span>
+        </div>
+        <div id="speakers"></div>
+        <p class="hint">
+          名前は編集できます。「枠を指定」で映像の人物と手動で対応付けます。
+        </p>
+        <div class="method">
+          <span>話者の区間</span> Nemotron 3 Diarization<br /><span
+            >日本語の文章</span
+          >
+          Whisper large-v3-turbo
+        </div>
+      </aside>
+    </div>
+    <section class="timeline-section">
+      <div class="timeline-heading">
+        <h3>タイムライン</h3>
+        <span>クリックして移動 <b id="sourceClock"></b></span>
+      </div>
+      <canvas
+        id="timeline"
+        height="210"
+        aria-label="話者ごとの発話区間"
+      ></canvas>
+      <div class="legend">
+        <span>同じ色は、同じ推定話者</span
+        ><span>録音を事前解析 · 映像の枠は手動設定</span>
+      </div>
+    </section>
+    <section class="transcript-section">
+      <div class="timeline-heading">
+        <h3>話者付きの文字起こし</h3>
+        <div class="transcript-controls">
+          <span>行をクリックして、その発言へ</span
+          ><label class="check"
+            ><input id="followTranscript" type="checkbox" checked />
+            再生位置に追従</label
+          >
+        </div>
+      </div>
+      <div id="transcript">
+        <p class="hint">
+          「日本語を文字起こし」を有効にして解析すると、ここに表示します。
+        </p>
+      </div>
+    </section>
+    <footer>
+      音声は外部のAIサービスへ送信しません。話者IDは音声内の識別用です。文字起こしと話者の対応は推定のため、必要に応じて原音で確認してください。
+    </footer>
+  </main>
+  <script src="/app.js"></script>
+</html>

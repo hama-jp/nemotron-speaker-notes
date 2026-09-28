@@ -1,0 +1,10 @@
+# Install a CUDA-enabled PyTorch build first; see README.md.
+torch>=2.6
+transformers @ git+https://github.com/huggingface/transformers.git@07338b6c74a578868368e6e549dea83414e4b8cb
+openai-whisper==20250625
+fastapi>=0.115,<1
+uvicorn>=0.30,<1
+python-multipart>=0.0.18,<1
+soundfile>=0.13,<1
+librosa>=0.11,<2
+numpy>=2,<3
